@@ -178,12 +178,12 @@ jobs:
       # ===== 第六阶段：安装 Twrpdtgen =====
       - name: 🔧 安装 Twrpdtgen 设备树生成工具
         run: |
-          echo "::group::🔓 移除 Python 外部管理限制"
-          sudo rm -f /usr/lib/python3*/EXTERNALLY-MANAGED
-          echo "已解除限制"
+          echo "::group::⬆️ 升级 pip 到最新版"
+          unset PIP_BREAK_SYSTEM_PACKAGES
+          curl -sS https://bootstrap.pypa.io/get-pip.py | python3
           echo "::endgroup::"
           echo ""
-          echo "::group::📦 pip3 安装 twrpdtgen"
+          echo "::group::📦 pip 安装 twrpdtgen"
           pip3 install twrpdtgen -q
           echo "::endgroup::"
           echo ""
