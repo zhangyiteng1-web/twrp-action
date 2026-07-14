@@ -50,7 +50,7 @@ on:
 jobs:
   build-twrp:
     name: 编译 TWRP
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 360
 
     steps:
@@ -97,10 +97,19 @@ jobs:
       - name: 📂 检出工作流代码
         uses: actions/checkout@v4
 
+      - name: ☕ 安装 JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '8'
+
       # ===== 第四阶段：安装完整编译依赖 =====
       - name: 📦 安装编译依赖包
         run: |
-          echo "::group::🔄 更新软件源"
+          echo "::group::🔄 添加 deadsnakes PPA（安装 Python 2）"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq software-properties-common
+          sudo add-apt-repository -y ppa:deadsnakes/ppa
           sudo apt-get update -qq
           echo "::endgroup::"
           echo ""
@@ -117,7 +126,7 @@ jobs:
             gcc-multilib \
             g++-multilib \
             libc6-dev-i386 \
-            lib32ncurses5-dev \
+            lib32ncurses-dev \
             x11proto-core-dev \
             libx11-dev \
             lib32z1-dev \
@@ -126,17 +135,17 @@ jobs:
             xsltproc \
             unzip \
             fontconfig \
-            libncurses5 \
-            libncurses5-dev \
+            libncurses6 \
+            libncurses-dev \
             libssl-dev \
-            openjdk-8-jdk \
             rsync \
-            python2 \
+            python2.7 \
             python3 \
             python3-pip
           echo "::endgroup::"
           echo ""
           echo "::group::🐍 配置 Python 2 为默认版本"
+          sudo ln -sf /usr/bin/python2.7 /usr/bin/python2
           sudo ln -sf /usr/bin/python2 /usr/bin/python
           python --version
           echo "::endgroup::"
