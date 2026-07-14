@@ -178,8 +178,9 @@ jobs:
       # ===== 第六阶段：安装 Twrpdtgen =====
       - name: 🔧 安装 Twrpdtgen 设备树生成工具
         run: |
-          echo "::group::📦 pip3 安装 twrpdtgen"
-          pip3 install twrpdtgen -q
+          echo "::group::📦 pip3 安装 twrpdtgen（用户模式）"
+          pip3 install --user twrpdtgen -q
+          export PATH=~/.local/bin:$PATH
           echo "::endgroup::"
           echo ""
           echo "::group::✅ 验证安装"
