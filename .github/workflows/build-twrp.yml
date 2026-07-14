@@ -1,0 +1,286 @@
+name: Build TWRP Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      boot_img_url:
+        description: '📥 boot.img 直链下载地址（必填）'
+        required: true
+        type: string
+      twrp_branch:
+        description: '🔖 TWRP 版本分支'
+        required: false
+        default: 'twrp-9.0'
+        type: choice
+        options:
+          - twrp-9.0
+          - twrp-10.0
+          - twrp-11
+          - twrp-12.1
+      output_type:
+        description: '📦 编译产物类型（auto 自动检测）'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - recoveryimage
+          - bootimage
+      manufacturer:
+        description: '🏭 设备厂商（留空自动检测）'
+        required: false
+        default: ''
+        type: string
+      device_codename:
+        description: '📱 设备代号（留空自动检测）'
+        required: false
+        default: ''
+        type: string
+      sync_jobs:
+        description: '⚡ 源码同步线程数（留空自动检测 CPU 核心）'
+        required: false
+        default: ''
+        type: string
+      build_jobs:
+        description: '🔨 编译线程数（留空自动检测全部核心）'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  build-twrp:
+    name: 编译 TWRP
+    runs-on: ubuntu-20.04
+    timeout-minutes: 360
+
+    steps:
+      # ===== 第一阶段：启动与环境检查 =====
+      - name: 🚀 启动编译任务
+        run: |
+          echo "::group::📋 任务参数概览"
+          echo "📥 boot.img 地址: ${{ inputs.boot_img_url }}"
+          echo "🔖 TWRP 版本: ${{ inputs.twrp_branch }}"
+          echo "📦 输出类型: ${{ inputs.output_type }}"
+          echo "🏭 设备厂商: ${{ inputs.manufacturer || '自动检测' }}"
+          echo "📱 设备代号: ${{ inputs.device_codename || '自动检测' }}"
+          echo "⚡ 同步线程: ${{ inputs.sync_jobs || '自动' }}"
+          echo "🔨 编译线程: ${{ inputs.build_jobs || '自动' }}"
+          echo "::endgroup::"
+          echo ""
+          echo "::group::🖥️ 初始环境信息"
+          echo "操作系统: $(cat /etc/os-release | grep PRETTY_NAME | cut -d'"' -f2)"
+          echo "CPU 核心数: $(nproc)"
+          echo "内存总量: $(free -h | grep Mem | awk '{print $2}')"
+          echo "磁盘可用: $(df -h / | tail -1 | awk '{print $4}')"
+          echo "::endgroup::"
+          echo ""
+          echo "✅ 任务启动，开始环境准备..."
+
+      # ===== 第二阶段：磁盘扩容 =====
+      - name: 💾 扩容磁盘空间
+        run: |
+          echo "::group::🗑️ 清理预装软件释放空间"
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          echo "清理完成"
+          echo "::endgroup::"
+          echo ""
+          echo "::group::📊 扩容后磁盘状态"
+          df -h /
+          echo "::endgroup::"
+          echo ""
+          echo "✅ 磁盘扩容完成（编译 TWRP 建议 100GB+）"
+
+      # ===== 第三阶段：检出代码 =====
+      - name: 📂 检出工作流代码
+        uses: actions/checkout@v4
+
+      # ===== 第四阶段：安装完整编译依赖 =====
+      - name: 📦 安装编译依赖包
+        run: |
+          echo "::group::🔄 更新软件源"
+          sudo apt-get update -qq
+          echo "::endgroup::"
+          echo ""
+          echo "::group::📥 安装完整编译依赖（共20+个包）"
+          sudo apt-get install -y -qq \
+            git-core \
+            gnupg \
+            flex \
+            bison \
+            build-essential \
+            zip \
+            curl \
+            zlib1g-dev \
+            gcc-multilib \
+            g++-multilib \
+            libc6-dev-i386 \
+            lib32ncurses5-dev \
+            x11proto-core-dev \
+            libx11-dev \
+            lib32z1-dev \
+            libgl1-mesa-dev \
+            libxml2-utils \
+            xsltproc \
+            unzip \
+            fontconfig \
+            libncurses5 \
+            libncurses5-dev \
+            libssl-dev \
+            openjdk-8-jdk \
+            rsync \
+            python2 \
+            python3 \
+            python3-pip
+          echo "::endgroup::"
+          echo ""
+          echo "::group::🐍 配置 Python 2 为默认版本"
+          sudo ln -sf /usr/bin/python2 /usr/bin/python
+          python --version
+          echo "::endgroup::"
+          echo ""
+          echo "✅ 全部依赖安装完成"
+
+      # ===== 第五阶段：安装 Repo 工具 =====
+      - name: 🛠️ 安装 Repo 源码管理工具
+        run: |
+          echo "::group::📥 下载 Repo 工具"
+          mkdir -p ~/bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          echo "::endgroup::"
+          echo ""
+          echo "::group::🔧 配置环境变量"
+          echo 'export PATH=~/bin:$PATH' >> ~/.bashrc
+          export PATH=~/bin:$PATH
+          repo version
+          echo "::endgroup::"
+          echo ""
+          echo "::group::👤 配置 Git 身份"
+          git config --global user.name "TWRP Builder"
+          git config --global user.email "builder@github.actions"
+          git config --global color.ui false
+          echo "::endgroup::"
+          echo ""
+          echo "✅ Repo 工具安装完成"
+
+      # ===== 第六阶段：安装 Twrpdtgen =====
+      - name: 🔧 安装 Twrpdtgen 设备树生成工具
+        run: |
+          echo "::group::📦 pip3 安装 twrpdtgen"
+          pip3 install twrpdtgen -q
+          echo "::endgroup::"
+          echo ""
+          echo "::group::✅ 验证安装"
+          python3 -m twrpdtgen --version || echo "twrpdtgen 已就绪"
+          echo "::endgroup::"
+          echo ""
+          echo "✅ Twrpdtgen 安装完成"
+
+      # ===== 第七阶段：下载 boot.img =====
+      - name: 📥 下载原厂 boot.img
+        id: download_boot
+        run: |
+          echo "::group::🌐 正在下载 boot.img"
+          mkdir -p input
+          wget -q --show-progress -O input/boot.img "${{ inputs.boot_img_url }}"
+          echo "::endgroup::"
+          echo ""
+          echo "::group::📊 文件校验"
+          ls -lh input/boot.img
+          file input/boot.img
+          md5sum input/boot.img
+          echo "::endgroup::"
+          echo ""
+          echo "✅ boot.img 下载并校验完成"
+
+      # ===== 第八阶段：核心编译（调用 Action） =====
+      - name: 🔨 编译 TWRP 镜像
+        id: twrp
+        uses: ./
+        with:
+          boot-img-url: ${{ inputs.boot_img_url }}
+          twrp-branch: ${{ inputs.twrp_branch }}
+          output-type: ${{ inputs.output_type }}
+          manufacturer: ${{ inputs.manufacturer }}
+          device-codename: ${{ inputs.device_codename }}
+          sync-jobs: ${{ inputs.sync_jobs }}
+          build-jobs: ${{ inputs.build_jobs }}
+
+      # ===== 第九阶段：产物检查 =====
+      - name: 🔍 检查编译产物
+        id: check_output
+        run: |
+          echo "::group::📂 输出目录结构"
+          ls -lah output/ 2>/dev/null || echo "⚠️  output 目录为空或不存在"
+          echo "::endgroup::"
+          echo ""
+          echo "::group::📊 产物文件详情"
+          if [ -d output ]; then
+            find output -type f -exec ls -lh {} \;
+          else
+            echo "❌ 未找到 output 目录"
+            exit 1
+          fi
+          echo "::endgroup::"
+          echo ""
+          echo "::group::🧩 镜像文件信息"
+          found=0
+          for img in output/*.img; do
+            if [ -f "$img" ]; then
+              echo "文件: $(basename $img)"
+              file "$img"
+              echo "大小: $(du -h $img | cut -f1)"
+              echo "---"
+              found=1
+            fi
+          done
+          if [ $found -eq 0 ]; then
+            echo "⚠️  未找到 .img 镜像文件"
+          fi
+          echo "::endgroup::"
+          echo ""
+          echo "✅ 产物检查完成"
+
+      # ===== 第十阶段：上传产物 =====
+      - name: ☁️ 上传编译产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-${{ steps.twrp.outputs.device-codename }}-${{ inputs.twrp_branch }}
+          path: output/
+          compression-level: 9
+
+      # ===== 第十一阶段：结果汇总 =====
+      - name: 📋 编译结果汇总
+        run: |
+          echo ""
+          echo "========================================"
+          echo "   ✅ TWRP 编译完成！"
+          echo "========================================"
+          echo ""
+          echo "::group::📱 设备信息"
+          echo "设备厂商: ${{ steps.twrp.outputs.manufacturer }}"
+          echo "设备代号: ${{ steps.twrp.outputs.device-codename }}"
+          echo "::endgroup::"
+          echo ""
+          echo "::group::🔖 版本信息"
+          echo "TWRP 版本: ${{ inputs.twrp_branch }}"
+          echo "编译类型: ${{ inputs.output_type }}"
+          echo "::endgroup::"
+          echo ""
+          echo "::group::📦 下载说明"
+          echo "产物已上传至 Artifacts"
+          echo "请在当前运行页面右侧找到 Artifacts 区域下载"
+          echo "文件名: twrp-${{ steps.twrp.outputs.device-codename }}-${{ inputs.twrp_branch }}"
+          echo "::endgroup::"
+          echo ""
+          echo "::group::💡 常见问题提示"
+          echo "1. 若编译失败，检查 Python 版本是否为 2.x"
+          echo "2. 若 mkbootimg --dtb 报错，需修改 BoardConfig.mk 为 --dt"
+          echo "3. 若空间不足，可使用 --depth=1 浅克隆源码"
+          echo "4. Twrpdtgen 生成的设备树可能需要手动调整"
+          echo "::endgroup::"
+          echo ""
+          echo "🎉 编译任务全部完成！"
