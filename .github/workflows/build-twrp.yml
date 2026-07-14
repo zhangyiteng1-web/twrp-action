@@ -50,7 +50,7 @@ on:
 jobs:
   build-twrp:
     name: 编译 TWRP
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     timeout-minutes: 360
 
     steps:
