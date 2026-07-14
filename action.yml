@@ -81,10 +81,10 @@ runs:
         curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
         echo "$HOME/bin" >> $GITHUB_PATH
-        # 安装 twrpdtgen (先升级 pip 避开系统限制)
+        # 安装 twrpdtgen (用 2.x 旧版，兼容性更好)
         unset PIP_BREAK_SYSTEM_PACKAGES
         curl -sS https://bootstrap.pypa.io/get-pip.py | python3
-        pip3 install twrpdtgen -q
+        pip3 install "twrpdtgen<3.0" -q
         # 配置 git
         git config --global user.name "TWRP Builder"
         git config --global user.email "builder@twrp.local"
