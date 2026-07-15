@@ -218,6 +218,13 @@ runs:
           if grep -q "\-\-dtb" "$BOARD_CONFIG"; then
             sed -i 's/--dtb/--dt/g' "$BOARD_CONFIG"
           fi
+          # 修复 recovery-as-boot 必须搭配 system_root_image 的问题
+          if grep -q "BOARD_USES_RECOVERY_AS_BOOT.*true" "$BOARD_CONFIG"; then
+            if ! grep -q "BOARD_BUILD_SYSTEM_ROOT_IMAGE" "$BOARD_CONFIG"; then
+              echo "BOARD_BUILD_SYSTEM_ROOT_IMAGE := true" >> "$BOARD_CONFIG"
+              echo "已启用 BOARD_BUILD_SYSTEM_ROOT_IMAGE (配合 recovery-as-boot)"
+            fi
+          fi
         fi
 
     - name: '编译 TWRP'
