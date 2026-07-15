@@ -158,6 +158,65 @@ runs:
           
           echo "✅ 设备树克隆完成"
           ls -la "$MANUFACTURER/$DEVICE/"
+          
+          # ===== 检查并修正设备树路径（目录名可能和产品名不一致）=====
+          echo ""
+          echo "===== 检查设备树路径 ====="
+          OMNI_MK=$(find "$MANUFACTURER/$DEVICE" -name "omni_*.mk" -type f | head -1)
+          if [ -n "$OMNI_MK" ]; then
+            ACTUAL_DT_DIR=$(dirname "$OMNI_MK")
+            echo "omni 文件实际位置: $ACTUAL_DT_DIR"
+            
+            # 从 omni 文件中解析它 include 的 device.mk 路径，得到正确的厂商/代号
+            INCLUDE_PATH=$(grep -oP 'device/\K[^/]+/[^/]+(?=/device\.mk)' "$OMNI_MK" | head -1)
+            
+            if [ -n "$INCLUDE_PATH" ]; then
+              CORRECT_MANUFACTURER=$(echo "$INCLUDE_PATH" | cut -d'/' -f1)
+              CORRECT_DEVICE=$(echo "$INCLUDE_PATH" | cut -d'/' -f2)
+              CORRECT_DIR="$INCLUDE_PATH"
+              
+              echo "omni 文件期望路径: device/$INCLUDE_PATH"
+              
+              if [ "$MANUFACTURER/$DEVICE" != "$CORRECT_DIR" ]; then
+                echo "检测到目录名不匹配，正在修正路径..."
+                mkdir -p "$(dirname "$CORRECT_DIR")"
+                mv "$MANUFACTURER/$DEVICE" "$CORRECT_DIR"
+                
+                # 更新环境变量为修正后的值
+                MANUFACTURER="$CORRECT_MANUFACTURER"
+                DEVICE="$CORRECT_DEVICE"
+                echo "路径修正完成: device/$MANUFACTURER/$DEVICE"
+                
+                # 清理残留的空目录
+                find . -type d -empty -delete 2>/dev/null || true
+              else
+                echo "路径已正确，无需修正"
+              fi
+            else
+              echo "⚠️  无法从 omni 文件解析路径，跳过修正"
+            fi
+          else
+            echo "⚠️  未找到 omni_*.mk，尝试从 AndroidProducts.mk 检测"
+            # 备选：从 AndroidProducts.mk 检测正确路径
+            ANDROID_PRODUCTS_MK=$(find "$MANUFACTURER/$DEVICE" -name "AndroidProducts.mk" -type f | head -1)
+            if [ -n "$ANDROID_PRODUCTS_MK" ]; then
+              PRODUCT_MK_PATH=$(grep -oP 'device/\K[^ ]+\.mk' "$ANDROID_PRODUCTS_MK" | head -1)
+              if [ -n "$PRODUCT_MK_PATH" ]; then
+                EXPECTED_DIR=$(dirname "$PRODUCT_MK_PATH")
+                echo "AndroidProducts.mk 期望路径: device/$EXPECTED_DIR"
+                if [ "$MANUFACTURER/$DEVICE" != "$EXPECTED_DIR" ]; then
+                  echo "检测到目录名不匹配，正在修正路径..."
+                  mkdir -p "$(dirname "$EXPECTED_DIR")"
+                  mv "$MANUFACTURER/$DEVICE" "$EXPECTED_DIR"
+                  MANUFACTURER=$(echo "$EXPECTED_DIR" | cut -d'/' -f1)
+                  DEVICE=$(echo "$EXPECTED_DIR" | cut -d'/' -f2)
+                  echo "路径修正完成: device/$MANUFACTURER/$DEVICE"
+                  find . -type d -empty -delete 2>/dev/null || true
+                fi
+              fi
+            fi
+          fi
+          echo "=========================="
 
         # ===== 模式二：twrpdtgen 自动生成 =====
         else
