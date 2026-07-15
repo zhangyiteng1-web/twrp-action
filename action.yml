@@ -1,13 +1,9 @@
 name: 'TWRP Auto Builder'
-
 description: '只需提供 boot.img 直链，自动生成设备树并编译 TWRP 镜像'
-
 author: 'twrp-action'
-
 branding:
   icon: 'smartphone'
   color: 'blue'
-
 inputs:
   boot-img-url:
     description: 'boot.img 或 recovery.img 的直链下载地址'
@@ -40,7 +36,6 @@ inputs:
     description: '编译并行线程数 (留空自动检测全部 CPU 核心)'
     required: false
     default: ''
-
 outputs:
   recovery-image:
     description: '编译生成的 recovery.img 路径'
@@ -54,7 +49,6 @@ outputs:
   manufacturer:
     description: '检测到的设备厂商'
     value: ${{ steps.dtgen.outputs.manufacturer }}
-
 runs:
   using: 'composite'
   steps:
@@ -228,6 +222,31 @@ runs:
             fi
           fi
         fi
+
+        # 修复 bootctrl.holi 等平台 bootctrl 库缺失问题
+        echo "===== 修复 bootctrl 平台库缺失 ====="
+        BOARD_PLATFORM=$(grep -oP 'TARGET_BOARD_PLATFORM.*=\s*\K.+' "$BOARD_CONFIG" | head -1 | tr -d '[:space:]')
+        if [ -n "$BOARD_PLATFORM" ]; then
+          echo "检测到平台: $BOARD_PLATFORM"
+          BOOTCTRL_DIR="${{ github.workspace }}/twrp/hardware/qcom/bootctrl"
+          mkdir -p "$BOOTCTRL_DIR"
+          # 创建 dummy bootctrl 静态库满足依赖
+          cat > "$BOOTCTRL_DIR/Android.mk" << 'BOOTCTRL_EOF'
+LOCAL_PATH := $(call my-dir)
+include $(CLEAR_VARS)
+LOCAL_MODULE := bootctrl.$(TARGET_BOARD_PLATFORM)
+LOCAL_MODULE_TAGS := optional
+LOCAL_SRC_FILES := boot_ctrl_stub.c
+LOCAL_C_INCLUDES += system/core/fs_mgr/include
+include $(BUILD_STATIC_LIBRARY)
+BOOTCTRL_EOF
+          # 创建空的 stub 源文件
+          touch "$BOOTCTRL_DIR/boot_ctrl_stub.c"
+          echo "已创建 dummy bootctrl.$BOARD_PLATFORM 模块"
+        else
+          echo "未检测到 TARGET_BOARD_PLATFORM，跳过 bootctrl 修复"
+        fi
+        echo "====================================="
 
     - name: '编译 TWRP'
       shell: bash
