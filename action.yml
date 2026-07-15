@@ -56,7 +56,6 @@ runs:
       shell: bash
       run: |
         sudo apt-get update -qq
-        # 添加 deadsnakes PPA (安装 Python 2.7)
         sudo apt-get install -y -qq software-properties-common
         sudo add-apt-repository -y ppa:deadsnakes/ppa
         sudo apt-get update -qq
@@ -67,19 +66,15 @@ runs:
           lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc \
           unzip fontconfig libncurses6 libncurses-dev \
           python2.7 python3 python3-pip rsync libssl-dev
-        # 设置 Python 2 为默认 python
         sudo ln -sf /usr/bin/python2.7 /usr/bin/python2
         sudo ln -sf /usr/bin/python2 /usr/bin/python
-        # 安装 repo 工具
         mkdir -p ~/bin
         curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
         echo "$HOME/bin" >> $GITHUB_PATH
-        # 安装 twrpdtgen
         unset PIP_BREAK_SYSTEM_PACKAGES
         curl -sS https://bootstrap.pypa.io/get-pip.py | python3
         pip3 install "twrpdtgen" -q
-        # 配置 git
         git config --global user.name "TWRP Builder"
         git config --global user.email "builder@twrp.local"
         git config --global color.ui false
@@ -95,7 +90,6 @@ runs:
       run: |
         mkdir -p ${{ github.workspace }}/twrp
         cd ${{ github.workspace }}/twrp
-        # 自动检测同步线程数
         SYNC_JOBS="${{ inputs.sync-jobs }}"
         SYNC_JOBS=${SYNC_JOBS:-$(nproc --all)}
         echo "同步线程数: $SYNC_JOBS"
@@ -105,47 +99,39 @@ runs:
       id: dtgen
       shell: bash
       run: |
-        # 确保 device 目录存在 (minimal manifest 默认没有)
         mkdir -p ${{ github.workspace }}/twrp/device
         cd ${{ github.workspace }}/twrp/device
         BOOT_IMG="${{ github.workspace }}/input/boot.img"
         MANUFACTURER="${{ inputs.manufacturer }}"
         DEVICE="${{ inputs.device-codename }}"
-        # 如果未指定厂商和设备，先用 twrpdtgen 生成到临时目录
         if [ -z "$MANUFACTURER" ] || [ -z "$DEVICE" ]; then
           echo "使用 twrpdtgen 自动生成设备树..."
           mkdir -p tmp_device
           python3 -m twrpdtgen -o tmp_device "$BOOT_IMG"
-          # 递归查找包含 AndroidProducts.mk 的真实设备树目录
           REAL_DT_DIR=$(find tmp_device -type f -name "AndroidProducts.mk" -exec dirname {} \; | head -n1)
           echo "实际设备树目录：$REAL_DT_DIR"
-          # 从真实目录读取 AndroidProducts.mk
           if [ -f "$REAL_DT_DIR/AndroidProducts.mk" ]; then
             DETECTED_DEVICE=$(grep -oP 'PRODUCT_NAME.*=\s*\Komni_\K.+' "$REAL_DT_DIR/AndroidProducts.mk" | head -1)
             if [ -z "$DETECTED_DEVICE" ]; then
               DETECTED_DEVICE=$(grep -oP 'PRODUCT_DEVICE.*=\s*\K.+' "$REAL_DT_DIR/AndroidProducts.mk" | head -1)
             fi
           fi
-          # 从 BoardConfig.mk 尝试提取厂商信息
           if [ -f "$REAL_DT_DIR/BoardConfig.mk" ]; then
             DETECTED_MANUFACTURER=$(grep -oP 'TARGET_BOARD_PLATFORM.*=\s*\K.+' "$REAL_DT_DIR/BoardConfig.mk" | head -1)
           fi
-          # 默认值兜底
           DETECTED_MANUFACTURER=${DETECTED_MANUFACTURER:-unknown}
           DETECTED_DEVICE=${DETECTED_DEVICE:-generic}
           MANUFACTURER=${MANUFACTURER:-$DETECTED_MANUFACTURER}
           DEVICE=${DEVICE:-$DETECTED_DEVICE}
-          # 移动到正确的 device/manufacturer/device 目录
           mkdir -p "$MANUFACTURER"
           mv "$REAL_DT_DIR" "$MANUFACTURER/$DEVICE"
           rm -rf tmp_device
         else
-          # 用户指定了厂商和设备，直接生成
           mkdir -p "$MANUFACTURER"
           python3 -m twrpdtgen -o "$MANUFACTURER/$DEVICE" "$BOOT_IMG"
         fi
 
-        # 【核心修复：抹平twrpdtgen生成的xiaomi/代号嵌套文件夹】
+        # 抹平 twrpdtgen 自动生成的 xiaomi/代号 嵌套目录
         DEEP_PATH="${MANUFACTURER}/${DEVICE}/xiaomi/${DEVICE}"
         if [ -d "$DEEP_PATH" ]; then
           echo "发现嵌套设备树目录，自动抹平层级 $DEEP_PATH"
@@ -167,16 +153,23 @@ runs:
           sed -i "s|device/[^/]*\/${DEVICE}/device.mk|device/${MANUFACTURER}/${DEVICE}/device.mk|g" "$OMNI_MK"
         fi
 
-        # 修复常见编译问题
+        # BoardConfig 批量修复
         BOARD_CONFIG="${TARGET_DT_PATH}/BoardConfig.mk"
         if [ -f "$BOARD_CONFIG" ]; then
-          # 禁用 AVB
+          # 关闭AVB
           if ! grep -q "BOARD_AVB_ENABLE" "$BOARD_CONFIG"; then
             echo "BOARD_AVB_ENABLE := false" >> "$BOARD_CONFIG"
           fi
-          # 修复 dtb 参数
+          # 修正dtb参数
           if grep -q "\-\-dtb" "$BOARD_CONFIG"; then
             sed -i 's/--dtb/--dt/g' "$BOARD_CONFIG"
+          fi
+          # 修复 RAAB 机型 BOARD_BUILD_SYSTEM_ROOT_IMAGE 缺失报错
+          if grep -q "BOARD_USES_RECOVERY_AS_BOOT := true" "$BOARD_CONFIG"; then
+            echo "补充RAAB编译所需标记 BOARD_BUILD_SYSTEM_ROOT_IMAGE"
+            if ! grep -q "BOARD_BUILD_SYSTEM_ROOT_IMAGE" "$BOARD_CONFIG"; then
+              echo "BOARD_BUILD_SYSTEM_ROOT_IMAGE := true" >> "$BOARD_CONFIG"
+            fi
           fi
         fi
     - name: '编译 TWRP'
