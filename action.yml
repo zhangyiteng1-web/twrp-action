@@ -156,21 +156,19 @@ runs:
         # BoardConfig 批量修复
         BOARD_CONFIG="${TARGET_DT_PATH}/BoardConfig.mk"
         if [ -f "$BOARD_CONFIG" ]; then
-          # 关闭AVB
-          if ! grep -q "BOARD_AVB_ENABLE" "$BOARD_CONFIG"; then
-            echo "BOARD_AVB_ENABLE := false" >> "$BOARD_CONFIG"
-          fi
-          # 修正dtb参数
-          if grep -q "\-\-dtb" "$BOARD_CONFIG"; then
-            sed -i 's/--dtb/--dt/g' "$BOARD_CONFIG"
-          fi
-          # 修复 RAAB 机型 BOARD_BUILD_SYSTEM_ROOT_IMAGE 缺失报错
-          if grep -q "BOARD_USES_RECOVERY_AS_BOOT := true" "$BOARD_CONFIG"; then
-            echo "补充RAAB编译所需标记 BOARD_BUILD_SYSTEM_ROOT_IMAGE"
-            if ! grep -q "BOARD_BUILD_SYSTEM_ROOT_IMAGE" "$BOARD_CONFIG"; then
-              echo "BOARD_BUILD_SYSTEM_ROOT_IMAGE := true" >> "$BOARD_CONFIG"
+            # 删除所有AVB相关定义，规避分区大小校验报错
+            sed -i '/BOARD_AVB_ENABLE/d' "$BOARD_CONFIG"
+            # 修正dtb参数
+            if grep -q "\-\-dtb" "$BOARD_CONFIG"; then
+                sed -i 's/--dtb/--dt/g' "$BOARD_CONFIG"
             fi
-          fi
+            # 仅AB机型补充分区镜像标记
+            if grep -q "BOARD_USES_RECOVERY_AS_BOOT := true" "$BOARD_CONFIG"; then
+                echo "补充RAAB编译所需标记 BOARD_BUILD_SYSTEM_ROOT_IMAGE"
+                if ! grep -q "BOARD_BUILD_SYSTEM_ROOT_IMAGE" "$BOARD_CONFIG"; then
+                    echo "BOARD_BUILD_SYSTEM_ROOT_IMAGE := true" >> "$BOARD_CONFIG"
+                fi
+            fi
         fi
     - name: '编译 TWRP'
       shell: bash
