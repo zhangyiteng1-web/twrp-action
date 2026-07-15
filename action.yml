@@ -231,15 +231,13 @@ runs:
           BOOTCTRL_DIR="${{ github.workspace }}/twrp/hardware/qcom/bootctrl"
           mkdir -p "$BOOTCTRL_DIR"
           # 创建 dummy bootctrl 静态库满足依赖
-          cat > "$BOOTCTRL_DIR/Android.mk" << 'BOOTCTRL_EOF'
-LOCAL_PATH := $(call my-dir)
-include $(CLEAR_VARS)
-LOCAL_MODULE := bootctrl.$(TARGET_BOARD_PLATFORM)
-LOCAL_MODULE_TAGS := optional
-LOCAL_SRC_FILES := boot_ctrl_stub.c
-LOCAL_C_INCLUDES += system/core/fs_mgr/include
-include $(BUILD_STATIC_LIBRARY)
-BOOTCTRL_EOF
+          echo "LOCAL_PATH := \$(call my-dir)" > "$BOOTCTRL_DIR/Android.mk"
+          echo "include \$(CLEAR_VARS)" >> "$BOOTCTRL_DIR/Android.mk"
+          echo "LOCAL_MODULE := bootctrl.\$(TARGET_BOARD_PLATFORM)" >> "$BOOTCTRL_DIR/Android.mk"
+          echo "LOCAL_MODULE_TAGS := optional" >> "$BOOTCTRL_DIR/Android.mk"
+          echo "LOCAL_SRC_FILES := boot_ctrl_stub.c" >> "$BOOTCTRL_DIR/Android.mk"
+          echo "LOCAL_C_INCLUDES += system/core/fs_mgr/include" >> "$BOOTCTRL_DIR/Android.mk"
+          echo "include \$(BUILD_STATIC_LIBRARY)" >> "$BOOTCTRL_DIR/Android.mk"
           # 创建空的 stub 源文件
           touch "$BOOTCTRL_DIR/boot_ctrl_stub.c"
           echo "已创建 dummy bootctrl.$BOARD_PLATFORM 模块"
