@@ -81,7 +81,7 @@ runs:
         curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
         echo "$HOME/bin" >> $GITHUB_PATH
-        # 安装 twrpdtgen (1.x 经典稳定版，依赖少兼容性好)
+        # 安装 twrpdtgen
         unset PIP_BREAK_SYSTEM_PACKAGES
         curl -sS https://bootstrap.pypa.io/get-pip.py | python3
         pip3 install "twrpdtgen" -q
@@ -162,6 +162,50 @@ runs:
         echo "DEVICE_CODENAME=$DEVICE" >> $GITHUB_ENV
         echo "manufacturer=$MANUFACTURER" >> $GITHUB_OUTPUT
         echo "device-codename=$DEVICE" >> $GITHUB_OUTPUT
+
+        # 修复 twrpdtgen 3.x 嵌套目录问题（自动扁平化路径）
+        echo "===== 检查设备树路径 ====="
+        OMNI_MK=$(find "${{ github.workspace }}/twrp/device" -name "omni_*.mk" -type f | head -1)
+        if [ -n "$OMNI_MK" ]; then
+          ACTUAL_DT_DIR=$(dirname "$OMNI_MK")
+          echo "omni 文件实际位置: $ACTUAL_DT_DIR"
+          
+          # 从 omni 文件中解析它 include 的 device.mk 路径，得到正确的厂商/代号
+          INCLUDE_PATH=$(grep -oP 'device/\K[^/]+/[^/]+(?=/device\.mk)' "$OMNI_MK" | head -1)
+          
+          if [ -n "$INCLUDE_PATH" ]; then
+            CORRECT_MANUFACTURER=$(echo "$INCLUDE_PATH" | cut -d'/' -f1)
+            CORRECT_DEVICE=$(echo "$INCLUDE_PATH" | cut -d'/' -f2)
+            CORRECT_DIR="${{ github.workspace }}/twrp/device/$INCLUDE_PATH"
+            
+            echo "omni 文件期望路径: device/$INCLUDE_PATH"
+            
+            if [ "$ACTUAL_DT_DIR" != "$CORRECT_DIR" ]; then
+              echo "检测到嵌套目录，正在修正路径..."
+              mkdir -p "$(dirname "$CORRECT_DIR")"
+              mv "$ACTUAL_DT_DIR" "$CORRECT_DIR"
+              
+              # 更新环境变量为修正后的值
+              MANUFACTURER="$CORRECT_MANUFACTURER"
+              DEVICE="$CORRECT_DEVICE"
+              echo "MANUFACTURER=$MANUFACTURER" >> $GITHUB_ENV
+              echo "DEVICE_CODENAME=$DEVICE" >> $GITHUB_ENV
+              echo "manufacturer=$MANUFACTURER" >> $GITHUB_OUTPUT
+              echo "device-codename=$DEVICE" >> $GITHUB_OUTPUT
+              
+              # 清理残留的空目录
+              find "${{ github.workspace }}/twrp/device" -type d -empty -delete 2>/dev/null || true
+              echo "路径修正完成: device/$MANUFACTURER/$DEVICE"
+            else
+              echo "路径已正确，无需修正"
+            fi
+          else
+            echo "⚠️  无法从 omni 文件解析路径，跳过修正"
+          fi
+        else
+          echo "⚠️  未找到 omni_*.mk，设备树生成可能失败"
+        fi
+        echo "=========================="
 
         # 修复常见编译问题
         BOARD_CONFIG="${{ github.workspace }}/twrp/device/$MANUFACTURER/$DEVICE/BoardConfig.mk"
