@@ -41,7 +41,7 @@ outputs:
     description: '编译生成的 recovery.img 路径'
     value: ${{ steps.collect.outputs.recovery-image }}
   boot-image:
-    description: '编译生成的 boot.img 路径 (如适用)'
+    description: '编译生成的 boot.img 路径'
     value: ${{ steps.collect.outputs.boot-image }}
   device-codename:
     description: '检测到的设备代号'
@@ -70,7 +70,7 @@ runs:
         sudo ln -sf /usr/bin/python2 /usr/bin/python
         mkdir -p ~/bin
         curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-        chmod a+x ~/bin/repo
+        chmod a+x ~/bin
         echo "$HOME/bin" >> $GITHUB_PATH
         unset PIP_BREAK_SYSTEM_PACKAGES
         curl -sS https://bootstrap.pypa.io/get-pip.py | python3
@@ -131,7 +131,7 @@ runs:
           python3 -m twrpdtgen -o "$MANUFACTURER/$DEVICE" "$BOOT_IMG"
         fi
 
-        # 抹平 twrpdtgen 自动生成的 xiaomi/代号 嵌套目录
+        # 抹平 twrpdtgen 自动生成的 xiaomi 嵌套文件夹
         DEEP_PATH="${MANUFACTURER}/${DEVICE}/xiaomi/${DEVICE}"
         if [ -d "$DEEP_PATH" ]; then
           echo "发现嵌套设备树目录，自动抹平层级 $DEEP_PATH"
@@ -146,30 +146,31 @@ runs:
         echo "manufacturer=$MANUFACTURER" >> $GITHUB_OUTPUT
         echo "device-codename=$DEVICE" >> $GITHUB_OUTPUT
 
-        # 修复 omni_xxx.mk 内错误的 include 路径
         TARGET_DT_PATH="$MANUFACTURER/$DEVICE"
         OMNI_MK="$TARGET_DT_PATH/omni_${DEVICE}.mk"
         if [ -f "$OMNI_MK" ]; then
+          # 修复mk内写死错误device.mk路径
           sed -i "s|device/[^/]*\/${DEVICE}/device.mk|device/${MANUFACTURER}/${DEVICE}/device.mk|g" "$OMNI_MK"
+          # 删除OTA sideload模块，切断bootctrl.holi依赖
+          sed -i '/update_engine_sideload/d' "$OMNI_MK"
+          echo "TARGET_NO_UPDATE_ENGINE_SIDELOAD := true" >> "$OMNI_MK"
         fi
 
-        # BoardConfig 批量修复
+        # BoardConfig 统一修复块
         BOARD_CONFIG="${TARGET_DT_PATH}/BoardConfig.mk"
         if [ -f "$BOARD_CONFIG" ]; then
-            # 删除所有AVB相关定义，规避分区大小校验报错
+            # 清理AVB配置，规避分区大小校验报错
             sed -i '/BOARD_AVB_ENABLE/d' "$BOARD_CONFIG"
-            # 删除holi bootctrl两行依赖定义
+            # 移除Holi平台bootctrl依赖
             sed -i '/TARGET_BOOTCTRL_VERSION/d' "$BOARD_CONFIG"
             sed -i '/TARGET_BOOTCTRL_LIB/d' "$BOARD_CONFIG"
-            # 关闭update_engine_sideload编译，消除ninja缺失依赖
-            echo "TARGET_NO_UPDATE_ENGINE_SIDELOAD := true" >> "$BOARD_CONFIG"
-            # 修正dtb参数
+            # 修复mkbootimg --dtb参数兼容
             if grep -q "\-\-dtb" "$BOARD_CONFIG"; then
                 sed -i 's/--dtb/--dt/g' "$BOARD_CONFIG"
             fi
-            # 仅AB机型补充分区镜像标记
+            # RAAB机型自动补全编译标记
             if grep -q "BOARD_USES_RECOVERY_AS_BOOT := true" "$BOARD_CONFIG"; then
-                echo "补充RAAB编译所需标记 BOARD_BUILD_SYSTEM_ROOT_IMAGE"
+                echo "补充RAAB编译标记 BOARD_BUILD_SYSTEM_ROOT_IMAGE"
                 if ! grep -q "BOARD_BUILD_SYSTEM_ROOT_IMAGE" "$BOARD_CONFIG"; then
                     echo "BOARD_BUILD_SYSTEM_ROOT_IMAGE := true" >> "$BOARD_CONFIG"
                 fi
@@ -186,18 +187,19 @@ runs:
         export ALLOW_MISSING_DEPENDENCIES=true
         BOARD_CONFIG="device/${MANUFACTURER}/${DEVICE}/BoardConfig.mk"
         if [ "$OUTPUT_TYPE" = "auto" ]; then
-          if grep -q "BOARD_RECOVERYIMAGE_PARTITION_SIZE" "$BOARD_CONFIG" 2>/dev/null; then
-            OUTPUT_TYPE="recoveryimage"
-          else
-            OUTPUT_TYPE="bootimage"
-          fi
+            if grep -q "BOARD_RECOVERYIMAGE_PARTITION_SIZE" "$BOARD_CONFIG" 2>/dev/null; then
+              OUTPUT_TYPE="recoveryimage"
+            else
+              OUTPUT_TYPE="bootimage"
+            fi
         fi
         echo "编译类型: $OUTPUT_TYPE"
         echo "OUTPUT_TYPE=$OUTPUT_TYPE" >> $GITHUB_ENV
         BUILD_JOBS="${{ inputs.build-jobs }}"
         BUILD_JOBS=${BUILD_JOBS:-$(nproc --all)}
         echo "编译线程数: $BUILD_JOBS"
-        mka -j$BUILD_JOBS "$OUTPUT_TYPE"
+        # 全局关闭OTA引擎兜底，彻底规避bootctrl依赖报错
+        mka -j$BUILD_JOBS "$OUTPUT_TYPE" TARGET_NO_UPDATE_ENGINE=true
     - name: '收集编译产物'
       id: collect
       shell: bash
