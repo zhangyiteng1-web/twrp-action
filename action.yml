@@ -1,106 +1,3 @@
-name: 'TWRP Auto Builder'
-description: '只需提供 boot.img 直链，自动生成设备树并编译 TWRP 镜像'
-author: 'twrp-action'
-branding:
-  icon: 'smartphone'
-  color: 'blue'
-inputs:
-  boot-img-url:
-    description: 'boot.img 或 recovery.img 的直链下载地址'
-    required: true
-  twrp-branch:
-    description: 'TWRP 源码分支 (twrp-9.0, twrp-10.0, twrp-11, twrp-12.1 等)'
-    required: false
-    default: 'twrp-9.0'
-  manufacturer:
-    description: '设备厂商名称 (留空则自动从 boot.img 提取)'
-    required: false
-    default: ''
-  device-codename:
-    description: '设备代号 (留空则自动从 boot.img 提取)'
-    required: false
-    default: ''
-  output-type:
-    description: '编译产物类型: auto (自动检测), recoveryimage, bootimage'
-    required: false
-    default: 'auto'
-  manifest-url:
-    description: 'TWRP manifest 仓库地址'
-    required: false
-    default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni.git'
-  sync-jobs:
-    description: 'repo sync 并行线程数 (留空自动检测 CPU 核心数)'
-    required: false
-    default: ''
-  build-jobs:
-    description: '编译并行线程数 (留空自动检测全部 CPU 核心)'
-    required: false
-    default: ''
-outputs:
-  recovery-image:
-    description: '编译生成的 recovery.img 路径'
-    value: ${{ steps.collect.outputs.recovery-image }}
-  boot-image:
-    description: '编译生成的 boot.img 路径 (如适用)'
-    value: ${{ steps.collect.outputs.boot-image }}
-  device-codename:
-    description: '检测到的设备代号'
-    value: ${{ steps.dtgen.outputs.device-codename }}
-  manufacturer:
-    description: '检测到的设备厂商'
-    value: ${{ steps.dtgen.outputs.manufacturer }}
-runs:
-  using: 'composite'
-  steps:
-    - name: '安装编译依赖'
-      shell: bash
-      run: |
-        sudo apt-get update -qq
-        # 添加 deadsnakes PPA (安装 Python 2.7)
-        sudo apt-get install -y -qq software-properties-common
-        sudo add-apt-repository -y ppa:deadsnakes/ppa
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq \
-          git-core gnupg flex bison build-essential zip curl \
-          zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 \
-          lib32ncurses-dev x11proto-core-dev libx11-dev \
-          lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc \
-          unzip fontconfig libncurses6 libncurses-dev \
-          python2.7 python3 python3-pip rsync libssl-dev
-        # 设置 Python 2 为默认 python
-        sudo ln -sf /usr/bin/python2.7 /usr/bin/python2
-        sudo ln -sf /usr/bin/python2 /usr/bin/python
-        # 安装 repo 工具
-        mkdir -p ~/bin
-        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-        chmod a+x ~/bin/repo
-        echo "$HOME/bin" >> $GITHUB_PATH
-        # 安装 twrpdtgen (1.x 经典稳定版，依赖少兼容性好)
-        unset PIP_BREAK_SYSTEM_PACKAGES
-        curl -sS https://bootstrap.pypa.io/get-pip.py | python3
-        pip3 install "twrpdtgen" -q
-        # 配置 git
-        git config --global user.name "TWRP Builder"
-        git config --global user.email "builder@twrp.local"
-        git config --global color.ui false
-    - name: '下载 boot.img'
-      shell: bash
-      run: |
-        mkdir -p ${{ github.workspace }}/input
-        wget -q -O ${{ github.workspace }}/input/boot.img "${{ inputs.boot-img-url }}"
-        echo "boot.img 下载完成"
-        file ${{ github.workspace }}/input/boot.img
-    - name: '同步 TWRP 源码'
-      shell: bash
-      run: |
-        mkdir -p ${{ github.workspace }}/twrp
-        cd ${{ github.workspace }}/twrp
-        # 自动检测同步线程数
-        SYNC_JOBS="${{ inputs.sync-jobs }}"
-        SYNC_JOBS=${SYNC_JOBS:-$(nproc --all)}
-        echo "同步线程数: $SYNC_JOBS"
-        repo init --depth=1 -u ${{ inputs.manifest-url }} -b ${{ inputs.twrp-branch }}
-        repo sync -j$SYNC_JOBS --force-sync
     - name: '生成设备树'
       id: dtgen
       shell: bash
@@ -144,6 +41,17 @@ runs:
           mkdir -p "$MANUFACTURER"
           python3 -m twrpdtgen -o "$MANUFACTURER/$DEVICE" "$BOOT_IMG"
         fi
+
+        # ========== 新增核心修复代码，解决你当前报错 ==========
+        # 抹平twrpdtgen自动生成的 xiaomi/代号 嵌套文件夹
+        DEEP_TREE="${MANUFACTURER}/${DEVICE}/xiaomi/${DEVICE}"
+        if [ -d "$DEEP_TREE" ]; then
+            echo "检测到嵌套设备树目录，抹平层级：$DEEP_TREE"
+            mv "$DEEP_TREE"/* "${MANUFACTURER}/${DEVICE}/"
+            rm -rf "${MANUFACTURER}/${DEVICE}/xiaomi"
+        fi
+        # ======================================================
+
         echo "设备厂商: $MANUFACTURER"
         echo "设备代号: $DEVICE"
         echo "MANUFACTURER=$MANUFACTURER" >> $GITHUB_ENV
@@ -168,52 +76,3 @@ runs:
             sed -i 's/--dtb/--dt/g' "$BOARD_CONFIG"
           fi
         fi
-    - name: '编译 TWRP'
-      shell: bash
-      run: |
-        cd ${{ github.workspace }}/twrp
-        source build/envsetup.sh
-        DEVICE="${DEVICE_CODENAME}"
-        OUTPUT_TYPE="${{ inputs.output-type }}"
-        # lunch 设备
-        lunch "omni_${DEVICE}-eng"
-        # 允许缺失依赖（TWRP 编译标准配置）
-        export ALLOW_MISSING_DEPENDENCIES=true
-        # 自动检测输出类型
-        BOARD_CONFIG="device/${MANUFACTURER}/${DEVICE}/BoardConfig.mk"
-        if [ "$OUTPUT_TYPE" = "auto" ]; then
-          # 检查设备树中是否有 recovery 分区相关配置
-          if grep -q "BOARD_RECOVERYIMAGE_PARTITION_SIZE" "$BOARD_CONFIG" 2>/dev/null; then
-            OUTPUT_TYPE="recoveryimage"
-          else
-            OUTPUT_TYPE="bootimage"
-          fi
-        fi
-        echo "编译类型: $OUTPUT_TYPE"
-        echo "OUTPUT_TYPE=$OUTPUT_TYPE" >> $GITHUB_ENV
-        # 自动检测编译线程数
-        BUILD_JOBS="${{ inputs.build-jobs }}"
-        BUILD_JOBS=${BUILD_JOBS:-$(nproc --all)}
-        echo "编译线程数: $BUILD_JOBS"
-        # 开始编译
-        mka -j$BUILD_JOBS "$OUTPUT_TYPE"
-    - name: '收集编译产物'
-      id: collect
-      shell: bash
-      run: |
-        DEVICE="${DEVICE_CODENAME}"
-        OUTPUT_DIR="${{ github.workspace }}/twrp/out/target/product/${DEVICE}"
-        OUTPUT_ARTIFACTS="${{ github.workspace }}/output"
-        mkdir -p "$OUTPUT_ARTIFACTS"
-        if [ "${OUTPUT_TYPE}" = "recoveryimage" ] && [ -f "$OUTPUT_DIR/recovery.img" ]; then
-          cp "$OUTPUT_DIR/recovery.img" "$OUTPUT_ARTIFACTS/recovery.img"
-          echo "recovery-image=$OUTPUT_ARTIFACTS/recovery.img" >> $GITHUB_OUTPUT
-          echo "recovery.img 编译成功"
-        fi
-        if [ "${OUTPUT_TYPE}" = "bootimage" ] && [ -f "$OUTPUT_DIR/boot.img" ]; then
-          cp "$OUTPUT_DIR/boot.img" "$OUTPUT_ARTIFACTS/boot.img"
-          echo "boot-image=$OUTPUT_ARTIFACTS/boot.img" >> $GITHUB_OUTPUT
-          echo "boot.img 编译成功"
-        fi
-        # 列出所有产物
-        ls -lh "$OUTPUT_ARTIFACTS"/
