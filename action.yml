@@ -4,20 +4,30 @@ author: 'twrp-action'
 branding:
   icon: 'smartphone'
   color: 'blue'
+
 inputs:
   boot-img-url:
-    description: 'boot.img 或 recovery.img 的直链下载地址'
-    required: true
+    description: 'boot.img 或 recovery.img 的直链下载地址（使用自定义设备树时可留空）'
+    required: false
+    default: ''
+  device-tree-url:
+    description: '自定义设备树 GitHub 地址（提供则跳过 twrpdtgen 自动生成，直接使用该设备树）'
+    required: false
+    default: ''
+  device-tree-branch:
+    description: '自定义设备树分支（留空使用默认分支）'
+    required: false
+    default: ''
   twrp-branch:
     description: 'TWRP 源码分支 (twrp-9.0, twrp-10.0, twrp-11, twrp-12.1 等)'
     required: false
     default: 'twrp-9.0'
   manufacturer:
-    description: '设备厂商名称 (留空则自动从 boot.img 提取)'
+    description: '设备厂商名称 (使用自定义设备树时必填，否则自动检测)'
     required: false
     default: ''
   device-codename:
-    description: '设备代号 (留空则自动从 boot.img 提取)'
+    description: '设备代号 (使用自定义设备树时必填，否则自动检测)'
     required: false
     default: ''
   output-type:
@@ -36,6 +46,11 @@ inputs:
     description: '编译并行线程数 (留空自动检测全部 CPU 核心)'
     required: false
     default: ''
+  use-generic-bootctrl:
+    description: '启用通用 BootControl 修复（解决 HMI 等 undefined reference 链接错误）'
+    required: false
+    default: 'false'
+
 outputs:
   recovery-image:
     description: '编译生成的 recovery.img 路径'
@@ -49,6 +64,7 @@ outputs:
   manufacturer:
     description: '检测到的设备厂商'
     value: ${{ steps.dtgen.outputs.manufacturer }}
+
 runs:
   using: 'composite'
   steps:
@@ -65,7 +81,7 @@ runs:
           zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 \
           lib32ncurses-dev x11proto-core-dev libx11-dev \
           lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc \
-          unzip fontconfig libncurses6 libncurses-dev libncurses5 \
+          unzip fontconfig libncurses6 libncurses-dev \
           python2.7 python3 python3-pip rsync libssl-dev
         # 设置 Python 2 为默认 python
         sudo ln -sf /usr/bin/python2.7 /usr/bin/python2
@@ -83,13 +99,16 @@ runs:
         git config --global user.name "TWRP Builder"
         git config --global user.email "builder@twrp.local"
         git config --global color.ui false
+
     - name: '下载 boot.img'
+      if: inputs.boot-img-url != ''
       shell: bash
       run: |
         mkdir -p ${{ github.workspace }}/input
         wget -q -O ${{ github.workspace }}/input/boot.img "${{ inputs.boot-img-url }}"
         echo "boot.img 下载完成"
         file ${{ github.workspace }}/input/boot.img
+
     - name: '同步 TWRP 源码'
       shell: bash
       run: |
@@ -101,118 +120,204 @@ runs:
         echo "同步线程数: $SYNC_JOBS"
         repo init --depth=1 -u ${{ inputs.manifest-url }} -b ${{ inputs.twrp-branch }}
         repo sync -j$SYNC_JOBS --force-sync
-    - name: '生成设备树'
+
+    - name: '准备设备树'
       id: dtgen
       shell: bash
       run: |
         # 确保 device 目录存在 (minimal manifest 默认没有)
         mkdir -p ${{ github.workspace }}/twrp/device
         cd ${{ github.workspace }}/twrp/device
-        BOOT_IMG="${{ github.workspace }}/input/boot.img"
+
+        DT_URL="${{ inputs.device-tree-url }}"
+        DT_BRANCH="${{ inputs.device-tree-branch }}"
         MANUFACTURER="${{ inputs.manufacturer }}"
         DEVICE="${{ inputs.device-codename }}"
-        # 如果未指定厂商和设备，先用 twrpdtgen 生成到临时目录
-        if [ -z "$MANUFACTURER" ] || [ -z "$DEVICE" ]; then
-          echo "使用 twrpdtgen 自动生成设备树..."
-          mkdir -p tmp_device
-          python3 -m twrpdtgen -o tmp_device "$BOOT_IMG"
-          # 从 AndroidProducts.mk 中提取设备名
-          if [ -f "tmp_device/AndroidProducts.mk" ]; then
-            DETECTED_DEVICE=$(grep -oP 'PRODUCT_NAME.*=\s*\Komni_\K.+' tmp_device/AndroidProducts.mk | head -1)
-            if [ -z "$DETECTED_DEVICE" ]; then
-              DETECTED_DEVICE=$(grep -oP 'PRODUCT_DEVICE.*=\s*\K.+' tmp_device/AndroidProducts.mk | head -1)
-            fi
+        BOOT_IMG="${{ github.workspace }}/input/boot.img"
+
+        # ===== 模式一：使用自定义设备树 =====
+        if [ -n "$DT_URL" ]; then
+          echo "========================================"
+          echo "📦 使用自定义设备树模式"
+          echo "========================================"
+          
+          # 检查必填参数
+          if [ -z "$MANUFACTURER" ] || [ -z "$DEVICE" ]; then
+            echo "❌ 使用自定义设备树时，必须填写 设备厂商 和 设备代号"
+            exit 1
           fi
-          # 从 BoardConfig.mk 尝试提取厂商信息
-          if [ -f "tmp_device/BoardConfig.mk" ]; then
-            DETECTED_MANUFACTURER=$(grep -oP 'TARGET_BOARD_PLATFORM.*=\s*\K.+' tmp_device/BoardConfig.mk | head -1)
+          
+          # 构建克隆命令
+          CLONE_CMD="git clone $DT_URL $MANUFACTURER/$DEVICE"
+          if [ -n "$DT_BRANCH" ]; then
+            CLONE_CMD="$CLONE_CMD -b $DT_BRANCH --depth=1"
+          else
+            CLONE_CMD="$CLONE_CMD --depth=1"
           fi
-          # 默认值兜底
-          DETECTED_MANUFACTURER=${DETECTED_MANUFACTURER:-unknown}
-          DETECTED_DEVICE=${DETECTED_DEVICE:-generic}
-          MANUFACTURER=${MANUFACTURER:-$DETECTED_MANUFACTURER}
-          DEVICE=${DEVICE:-$DETECTED_DEVICE}
-          # 移动到正确的 device/manufacturer/device 目录
+          
+          echo "执行: $CLONE_CMD"
           mkdir -p "$MANUFACTURER"
-          mv tmp_device "$MANUFACTURER/$DEVICE"
+          eval $CLONE_CMD
+          
+          echo "✅ 设备树克隆完成"
+          ls -la "$MANUFACTURER/$DEVICE/"
+
+        # ===== 模式二：twrpdtgen 自动生成 =====
         else
-          # 用户指定了厂商和设备，直接生成
-          mkdir -p "$MANUFACTURER"
-          python3 -m twrpdtgen -o "$MANUFACTURER/$DEVICE" "$BOOT_IMG"
+          echo "========================================"
+          echo "🤖 使用 twrpdtgen 自动生成设备树"
+          echo "========================================"
+          
+          if [ ! -f "$BOOT_IMG" ]; then
+            echo "❌ 未找到 boot.img，请提供 boot-img-url 或 device-tree-url"
+            exit 1
+          fi
+
+          # 如果未指定厂商和设备，先用 twrpdtgen 生成到临时目录
+          if [ -z "$MANUFACTURER" ] || [ -z "$DEVICE" ]; then
+            echo "使用 twrpdtgen 自动生成设备树..."
+            mkdir -p tmp_device
+            python3 -m twrpdtgen -o tmp_device "$BOOT_IMG"
+
+            # 从 AndroidProducts.mk 中提取设备名
+            if [ -f "tmp_device/AndroidProducts.mk" ]; then
+              DETECTED_DEVICE=$(grep -oP 'PRODUCT_NAME.*=\s*\Komni_\K.+' tmp_device/AndroidProducts.mk | head -1)
+              if [ -z "$DETECTED_DEVICE" ]; then
+                DETECTED_DEVICE=$(grep -oP 'PRODUCT_DEVICE.*=\s*\K.+' tmp_device/AndroidProducts.mk | head -1)
+              fi
+            fi
+
+            # 从 BoardConfig.mk 尝试提取厂商信息
+            if [ -f "tmp_device/BoardConfig.mk" ]; then
+              DETECTED_MANUFACTURER=$(grep -oP 'TARGET_BOARD_PLATFORM.*=\s*\K.+' tmp_device/BoardConfig.mk | head -1)
+            fi
+
+            # 默认值兜底
+            DETECTED_MANUFACTURER=${DETECTED_MANUFACTURER:-unknown}
+            DETECTED_DEVICE=${DETECTED_DEVICE:-generic}
+            MANUFACTURER=${MANUFACTURER:-$DETECTED_MANUFACTURER}
+            DEVICE=${DEVICE:-$DETECTED_DEVICE}
+
+            # 移动到正确的 device/manufacturer/device 目录
+            mkdir -p "$MANUFACTURER"
+            mv tmp_device "$MANUFACTURER/$DEVICE"
+          else
+            # 用户指定了厂商和设备，直接生成
+            mkdir -p "$MANUFACTURER"
+            python3 -m twrpdtgen -o "$MANUFACTURER/$DEVICE" "$BOOT_IMG"
+          fi
+
+          # 修复 twrpdtgen 3.x 嵌套目录问题（自动扁平化路径）
+          echo "===== 检查设备树路径 ====="
+          OMNI_MK=$(find "${{ github.workspace }}/twrp/device" -name "omni_*.mk" -type f | head -1)
+          if [ -n "$OMNI_MK" ]; then
+            ACTUAL_DT_DIR=$(dirname "$OMNI_MK")
+            echo "omni 文件实际位置: $ACTUAL_DT_DIR"
+            
+            # 从 omni 文件中解析它 include 的 device.mk 路径，得到正确的厂商/代号
+            INCLUDE_PATH=$(grep -oP 'device/\K[^/]+/[^/]+(?=/device\.mk)' "$OMNI_MK" | head -1)
+            
+            if [ -n "$INCLUDE_PATH" ]; then
+              CORRECT_MANUFACTURER=$(echo "$INCLUDE_PATH" | cut -d'/' -f1)
+              CORRECT_DEVICE=$(echo "$INCLUDE_PATH" | cut -d'/' -f2)
+              CORRECT_DIR="${{ github.workspace }}/twrp/device/$INCLUDE_PATH"
+              
+              echo "omni 文件期望路径: device/$INCLUDE_PATH"
+              
+              if [ "$ACTUAL_DT_DIR" != "$CORRECT_DIR" ]; then
+                echo "检测到嵌套目录，正在修正路径..."
+                mkdir -p "$(dirname "$CORRECT_DIR")"
+                mv "$ACTUAL_DT_DIR" "$CORRECT_DIR"
+                
+                # 更新环境变量为修正后的值
+                MANUFACTURER="$CORRECT_MANUFACTURER"
+                DEVICE="$CORRECT_DEVICE"
+                echo "路径修正完成: device/$MANUFACTURER/$DEVICE"
+                
+                # 清理残留的空目录
+                find "${{ github.workspace }}/twrp/device" -type d -empty -delete 2>/dev/null || true
+              else
+                echo "路径已正确，无需修正"
+              fi
+            else
+              echo "⚠️  无法从 omni 文件解析路径，跳过修正"
+            fi
+          else
+            echo "⚠️  未找到 omni_*.mk，设备树生成可能失败"
+          fi
+          echo "=========================="
         fi
+
+        # ===== 输出设备信息 =====
+        echo ""
+        echo "📱 最终设备信息"
         echo "设备厂商: $MANUFACTURER"
         echo "设备代号: $DEVICE"
+        echo "设备树路径: device/$MANUFACTURER/$DEVICE"
+        
         echo "MANUFACTURER=$MANUFACTURER" >> $GITHUB_ENV
         echo "DEVICE_CODENAME=$DEVICE" >> $GITHUB_ENV
         echo "manufacturer=$MANUFACTURER" >> $GITHUB_OUTPUT
         echo "device-codename=$DEVICE" >> $GITHUB_OUTPUT
-        # 修复 twrpdtgen 3.x 嵌套目录问题（自动扁平化路径）
-        echo "===== 检查设备树路径 ====="
-        OMNI_MK=$(find "${{ github.workspace }}/twrp/device" -name "omni_*.mk" -type f | head -1)
-        if [ -n "$OMNI_MK" ]; then
-          ACTUAL_DT_DIR=$(dirname "$OMNI_MK")
-          echo "omni 文件实际位置: $ACTUAL_DT_DIR"
-          
-          # 从 omni 文件中解析它 include 的 device.mk 路径，得到正确的厂商/代号
-          INCLUDE_PATH=$(grep -oP 'device/\K[^/]+/[^/]+(?=/device\.mk)' "$OMNI_MK" | head -1)
-          
-          if [ -n "$INCLUDE_PATH" ]; then
-            CORRECT_MANUFACTURER=$(echo "$INCLUDE_PATH" | cut -d'/' -f1)
-            CORRECT_DEVICE=$(echo "$INCLUDE_PATH" | cut -d'/' -f2)
-            CORRECT_DIR="${{ github.workspace }}/twrp/device/$INCLUDE_PATH"
-            
-            echo "omni 文件期望路径: device/$INCLUDE_PATH"
-            
-            if [ "$ACTUAL_DT_DIR" != "$CORRECT_DIR" ]; then
-              echo "检测到嵌套目录，正在修正路径..."
-              mkdir -p "$(dirname "$CORRECT_DIR")"
-              mv "$ACTUAL_DT_DIR" "$CORRECT_DIR"
-              
-              # 更新环境变量为修正后的值
-              MANUFACTURER="$CORRECT_MANUFACTURER"
-              DEVICE="$CORRECT_DEVICE"
-              echo "MANUFACTURER=$MANUFACTURER" >> $GITHUB_ENV
-              echo "DEVICE_CODENAME=$DEVICE" >> $GITHUB_ENV
-              echo "manufacturer=$MANUFACTURER" >> $GITHUB_OUTPUT
-              echo "device-codename=$DEVICE" >> $GITHUB_OUTPUT
-              
-              # 清理残留的空目录
-              find "${{ github.workspace }}/twrp/device" -type d -empty -delete 2>/dev/null || true
-              echo "路径修正完成: device/$MANUFACTURER/$DEVICE"
-            else
-              echo "路径已正确，无需修正"
-            fi
-          else
-            echo "⚠️  无法从 omni 文件解析路径，跳过修正"
-          fi
-        else
-          echo "⚠️  未找到 omni_*.mk，设备树生成可能失败"
-        fi
-        echo "=========================="
-        # 修复常见编译问题
+
+        # ===== 通用修复（两种模式都执行） =====
         BOARD_CONFIG="${{ github.workspace }}/twrp/device/$MANUFACTURER/$DEVICE/BoardConfig.mk"
+        echo ""
+        echo "🔧 应用通用修复..."
+        
         if [ -f "$BOARD_CONFIG" ]; then
           # 禁用 AVB 避免分区大小报错（强制覆盖）
           if grep -q "BOARD_AVB_ENABLE" "$BOARD_CONFIG"; then
             sed -i 's/BOARD_AVB_ENABLE.*/BOARD_AVB_ENABLE := false/' "$BOARD_CONFIG"
+            echo "✓ 已禁用 BOARD_AVB_ENABLE"
           else
             echo "BOARD_AVB_ENABLE := false" >> "$BOARD_CONFIG"
+            echo "✓ 已添加 BOARD_AVB_ENABLE := false"
           fi
+          
           # 修复 mkbootimg --dtb 参数兼容问题
           if grep -q "\-\-dtb" "$BOARD_CONFIG"; then
             sed -i 's/--dtb/--dt/g' "$BOARD_CONFIG"
+            echo "✓ 已修复 --dtb → --dt"
           fi
+          
           # 修复 recovery-as-boot 必须搭配 system_root_image 的问题
           if grep -q "BOARD_USES_RECOVERY_AS_BOOT.*true" "$BOARD_CONFIG"; then
             if ! grep -q "BOARD_BUILD_SYSTEM_ROOT_IMAGE" "$BOARD_CONFIG"; then
               echo "BOARD_BUILD_SYSTEM_ROOT_IMAGE := true" >> "$BOARD_CONFIG"
-              echo "已启用 BOARD_BUILD_SYSTEM_ROOT_IMAGE (配合 recovery-as-boot)"
+              echo "✓ 已启用 BOARD_BUILD_SYSTEM_ROOT_IMAGE"
             fi
           fi
+        else
+          echo "⚠️  未找到 BoardConfig.mk，跳过通用修复"
         fi
+
+        # ===== 通用 BootControl 修复（方案二）=====
+        if [ "${{ inputs.use-generic-bootctrl }}" = "true" ]; then
+          echo ""
+          echo "🔧 应用通用 BootControl 修复（方案二）..."
+          if [ -f "$BOARD_CONFIG" ]; then
+            if grep -q "TARGET_HAS_GENERIC_BOOTCONTROL" "$BOARD_CONFIG"; then
+              sed -i 's/TARGET_HAS_GENERIC_BOOTCONTROL.*/TARGET_HAS_GENERIC_BOOTCONTROL := true/' "$BOARD_CONFIG"
+            else
+              echo "" >> "$BOARD_CONFIG"
+              echo "# 修复 HMI 等 undefined reference 链接错误" >> "$BOARD_CONFIG"
+              echo "TARGET_HAS_GENERIC_BOOTCONTROL := true" >> "$BOARD_CONFIG"
+            fi
+            echo "✓ 已启用 TARGET_HAS_GENERIC_BOOTCONTROL"
+          else
+            echo "⚠️  未找到 BoardConfig.mk，跳过 BootControl 修复"
+          fi
+        fi
+
         # ===== 修复缺失的依赖库 =====
+        echo ""
         echo "===== 创建缺失依赖库 ====="
-        BOARD_PLATFORM=$(grep -oP 'TARGET_BOARD_PLATFORM.*=\s*\K.+' "$BOARD_CONFIG" | head -1 | tr -d '[:space:]')
+        if [ -f "$BOARD_CONFIG" ]; then
+          BOARD_PLATFORM=$(grep -oP 'TARGET_BOARD_PLATFORM.*=\s*\K.+' "$BOARD_CONFIG" | head -1 | tr -d '[:space:]')
+        else
+          BOARD_PLATFORM=""
+        fi
         
         # 1. bootctrl 平台库 (高通平台特有，minimal manifest 没有)
         if [ -n "$BOARD_PLATFORM" ]; then
@@ -247,17 +352,24 @@ runs:
         fi
         
         echo "===== 依赖库创建完成 ====="
+        echo ""
+        echo "✅ 设备树准备完成！"
+
     - name: '编译 TWRP'
       shell: bash
       run: |
         cd ${{ github.workspace }}/twrp
         source build/envsetup.sh
+
         DEVICE="${DEVICE_CODENAME}"
         OUTPUT_TYPE="${{ inputs.output-type }}"
+
         # lunch 设备
         lunch "omni_${DEVICE}-eng"
+
         # 允许缺失依赖（TWRP 编译标准配置）
         export ALLOW_MISSING_DEPENDENCIES=true
+
         # 自动检测输出类型
         if [ "$OUTPUT_TYPE" = "auto" ]; then
           # 检查设备树中是否有 recovery 分区相关配置
@@ -268,14 +380,18 @@ runs:
             OUTPUT_TYPE="bootimage"
           fi
         fi
+
         echo "编译类型: $OUTPUT_TYPE"
         echo "OUTPUT_TYPE=$OUTPUT_TYPE" >> $GITHUB_ENV
+
         # 自动检测编译线程数
         BUILD_JOBS="${{ inputs.build-jobs }}"
         BUILD_JOBS=${BUILD_JOBS:-$(nproc --all)}
         echo "编译线程数: $BUILD_JOBS"
+
         # 开始编译
         mka -j$BUILD_JOBS "$OUTPUT_TYPE"
+
     - name: '收集编译产物'
       id: collect
       shell: bash
@@ -283,16 +399,20 @@ runs:
         DEVICE="${DEVICE_CODENAME}"
         OUTPUT_DIR="${{ github.workspace }}/twrp/out/target/product/${DEVICE}"
         OUTPUT_ARTIFACTS="${{ github.workspace }}/output"
+
         mkdir -p "$OUTPUT_ARTIFACTS"
+
         if [ "${OUTPUT_TYPE}" = "recoveryimage" ] && [ -f "$OUTPUT_DIR/recovery.img" ]; then
           cp "$OUTPUT_DIR/recovery.img" "$OUTPUT_ARTIFACTS/recovery.img"
           echo "recovery-image=$OUTPUT_ARTIFACTS/recovery.img" >> $GITHUB_OUTPUT
           echo "recovery.img 编译成功"
         fi
+
         if [ "${OUTPUT_TYPE}" = "bootimage" ] && [ -f "$OUTPUT_DIR/boot.img" ]; then
           cp "$OUTPUT_DIR/boot.img" "$OUTPUT_ARTIFACTS/boot.img"
           echo "boot-image=$OUTPUT_ARTIFACTS/boot.img" >> $GITHUB_OUTPUT
           echo "boot.img 编译成功"
         fi
+
         # 列出所有产物
         ls -lh "$OUTPUT_ARTIFACTS"/
