@@ -4,7 +4,6 @@ author: 'twrp-action'
 branding:
   icon: 'smartphone'
   color: 'blue'
-
 inputs:
   boot-img-url:
     description: 'boot.img 或 recovery.img 的直链下载地址（使用自定义设备树时可留空）'
@@ -50,7 +49,6 @@ inputs:
     description: '启用通用 BootControl 修复（解决 HMI 等 undefined reference 链接错误）'
     required: false
     default: 'false'
-
 outputs:
   recovery-image:
     description: '编译生成的 recovery.img 路径'
@@ -64,7 +62,6 @@ outputs:
   manufacturer:
     description: '检测到的设备厂商'
     value: ${{ steps.dtgen.outputs.manufacturer }}
-
 runs:
   using: 'composite'
   steps:
@@ -255,8 +252,36 @@ runs:
         echo "设备代号: $DEVICE"
         echo "设备树路径: device/$MANUFACTURER/$DEVICE"
         
+        # ===== 自动检测 lunch 产品名 =====
+        echo ""
+        echo "🔍 检测 lunch 产品名..."
+        ANDROID_PRODUCTS_MK="${{ github.workspace }}/twrp/device/$MANUFACTURER/$DEVICE/AndroidProducts.mk"
+        LUNCH_PRODUCT=""
+        
+        if [ -f "$ANDROID_PRODUCTS_MK" ]; then
+          # 方法1: 从 PRODUCT_MAKEFILES 中找到产品 mk 文件，再提取 PRODUCT_NAME
+          PRODUCT_MK_PATH=$(grep -oP 'device/[^ ]+\.mk' "$ANDROID_PRODUCTS_MK" | head -1)
+          if [ -n "$PRODUCT_MK_PATH" ] && [ -f "${{ github.workspace }}/twrp/$PRODUCT_MK_PATH" ]; then
+            LUNCH_PRODUCT=$(grep -oP 'PRODUCT_NAME\s*:?=\s*\K\S+' "${{ github.workspace }}/twrp/$PRODUCT_MK_PATH" | head -1)
+          fi
+          
+          # 方法2: 直接从 AndroidProducts.mk 找 omni_ 开头的产品名
+          if [ -z "$LUNCH_PRODUCT" ]; then
+            LUNCH_PRODUCT=$(grep -oP 'omni_\w+' "$ANDROID_PRODUCTS_MK" | head -1)
+          fi
+        fi
+        
+        # 兜底: 使用默认格式
+        if [ -z "$LUNCH_PRODUCT" ]; then
+          LUNCH_PRODUCT="omni_${DEVICE}"
+          echo "⚠️  未检测到产品名，使用默认: $LUNCH_PRODUCT"
+        else
+          echo "✅ 检测到产品名: $LUNCH_PRODUCT"
+        fi
+        
         echo "MANUFACTURER=$MANUFACTURER" >> $GITHUB_ENV
         echo "DEVICE_CODENAME=$DEVICE" >> $GITHUB_ENV
+        echo "LUNCH_PRODUCT=$LUNCH_PRODUCT" >> $GITHUB_ENV
         echo "manufacturer=$MANUFACTURER" >> $GITHUB_OUTPUT
         echo "device-codename=$DEVICE" >> $GITHUB_OUTPUT
 
@@ -364,8 +389,9 @@ runs:
         DEVICE="${DEVICE_CODENAME}"
         OUTPUT_TYPE="${{ inputs.output-type }}"
 
-        # lunch 设备
-        lunch "omni_${DEVICE}-eng"
+        # 使用自动检测的 lunch 产品名
+        echo "Lunch 目标: ${LUNCH_PRODUCT}-eng"
+        lunch "${LUNCH_PRODUCT}-eng"
 
         # 允许缺失依赖（TWRP 编译标准配置）
         export ALLOW_MISSING_DEPENDENCIES=true
@@ -396,20 +422,34 @@ runs:
       id: collect
       shell: bash
       run: |
-        DEVICE="${DEVICE_CODENAME}"
-        OUTPUT_DIR="${{ github.workspace }}/twrp/out/target/product/${DEVICE}"
         OUTPUT_ARTIFACTS="${{ github.workspace }}/output"
-
         mkdir -p "$OUTPUT_ARTIFACTS"
 
-        if [ "${OUTPUT_TYPE}" = "recoveryimage" ] && [ -f "$OUTPUT_DIR/recovery.img" ]; then
-          cp "$OUTPUT_DIR/recovery.img" "$OUTPUT_ARTIFACTS/recovery.img"
+        # 自动查找输出目录（产品名可能和设备代号不一致）
+        PRODUCT_OUT_DIR=""
+        for dir in ${{ github.workspace }}/twrp/out/target/product/*/; do
+          if [ -d "$dir" ] && ([ -f "$dir/recovery.img" ] || [ -f "$dir/boot.img" ]); then
+            PRODUCT_OUT_DIR="$dir"
+            break
+          fi
+        done
+
+        if [ -z "$PRODUCT_OUT_DIR" ]; then
+          echo "❌ 未找到编译输出目录"
+          ls -la ${{ github.workspace }}/twrp/out/target/product/ 2>/dev/null || echo "输出目录不存在"
+          exit 1
+        fi
+
+        echo "输出目录: $PRODUCT_OUT_DIR"
+
+        if [ -f "$PRODUCT_OUT_DIR/recovery.img" ]; then
+          cp "$PRODUCT_OUT_DIR/recovery.img" "$OUTPUT_ARTIFACTS/recovery.img"
           echo "recovery-image=$OUTPUT_ARTIFACTS/recovery.img" >> $GITHUB_OUTPUT
           echo "recovery.img 编译成功"
         fi
 
-        if [ "${OUTPUT_TYPE}" = "bootimage" ] && [ -f "$OUTPUT_DIR/boot.img" ]; then
-          cp "$OUTPUT_DIR/boot.img" "$OUTPUT_ARTIFACTS/boot.img"
+        if [ -f "$PRODUCT_OUT_DIR/boot.img" ]; then
+          cp "$PRODUCT_OUT_DIR/boot.img" "$OUTPUT_ARTIFACTS/boot.img"
           echo "boot-image=$OUTPUT_ARTIFACTS/boot.img" >> $GITHUB_OUTPUT
           echo "boot.img 编译成功"
         fi
