@@ -221,30 +221,10 @@ runs:
               echo "已启用 BOARD_BUILD_SYSTEM_ROOT_IMAGE (配合 recovery-as-boot)"
             fi
           fi
+          # 禁用 A/B OTA 更新，避免 update_engine_sideload 大量依赖缺失
+          echo "TW_INCLUDE_AB_UPDATE := false" >> "$BOARD_CONFIG"
+          echo "已禁用 A/B 更新模块 (跳过 update_engine 依赖)"
         fi
-
-        # 修复 bootctrl.holi 等平台 bootctrl 库缺失问题
-        echo "===== 修复 bootctrl 平台库缺失 ====="
-        BOARD_PLATFORM=$(grep -oP 'TARGET_BOARD_PLATFORM.*=\s*\K.+' "$BOARD_CONFIG" | head -1 | tr -d '[:space:]')
-        if [ -n "$BOARD_PLATFORM" ]; then
-          echo "检测到平台: $BOARD_PLATFORM"
-          BOOTCTRL_DIR="${{ github.workspace }}/twrp/hardware/qcom/bootctrl"
-          mkdir -p "$BOOTCTRL_DIR"
-          # 创建 dummy bootctrl 静态库满足依赖
-          echo "LOCAL_PATH := \$(call my-dir)" > "$BOOTCTRL_DIR/Android.mk"
-          echo "include \$(CLEAR_VARS)" >> "$BOOTCTRL_DIR/Android.mk"
-          echo "LOCAL_MODULE := bootctrl.\$(TARGET_BOARD_PLATFORM)" >> "$BOOTCTRL_DIR/Android.mk"
-          echo "LOCAL_MODULE_TAGS := optional" >> "$BOOTCTRL_DIR/Android.mk"
-          echo "LOCAL_SRC_FILES := boot_ctrl_stub.c" >> "$BOOTCTRL_DIR/Android.mk"
-          echo "LOCAL_C_INCLUDES += system/core/fs_mgr/include" >> "$BOOTCTRL_DIR/Android.mk"
-          echo "include \$(BUILD_STATIC_LIBRARY)" >> "$BOOTCTRL_DIR/Android.mk"
-          # 创建空的 stub 源文件
-          touch "$BOOTCTRL_DIR/boot_ctrl_stub.c"
-          echo "已创建 dummy bootctrl.$BOARD_PLATFORM 模块"
-        else
-          echo "未检测到 TARGET_BOARD_PLATFORM，跳过 bootctrl 修复"
-        fi
-        echo "====================================="
 
     - name: '编译 TWRP'
       shell: bash
