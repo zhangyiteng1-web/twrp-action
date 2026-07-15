@@ -221,10 +221,72 @@ runs:
               echo "已启用 BOARD_BUILD_SYSTEM_ROOT_IMAGE (配合 recovery-as-boot)"
             fi
           fi
-          # 禁用 A/B OTA 更新，避免 update_engine_sideload 大量依赖缺失
-          echo "TW_INCLUDE_AB_UPDATE := false" >> "$BOARD_CONFIG"
-          echo "已禁用 A/B 更新模块 (跳过 update_engine 依赖)"
         fi
+
+        # ===== 修复 update_engine_sideload 依赖缺失 =====
+        echo "===== 创建缺失依赖库 ====="
+        BOARD_PLATFORM=$(grep -oP 'TARGET_BOARD_PLATFORM.*=\s*\K.+' "$BOARD_CONFIG" | head -1 | tr -d '[:space:]')
+        
+        # 1. bootctrl 平台库
+        if [ -n "$BOARD_PLATFORM" ]; then
+          echo "检测到平台: $BOARD_PLATFORM"
+          BOOTCTRL_DIR="${{ github.workspace }}/twrp/hardware/qcom/bootctrl"
+          mkdir -p "$BOOTCTRL_DIR"
+          echo "LOCAL_PATH := \$(call my-dir)" > "$BOOTCTRL_DIR/Android.mk"
+          echo "include \$(CLEAR_VARS)" >> "$BOOTCTRL_DIR/Android.mk"
+          echo "LOCAL_MODULE := bootctrl.\$(TARGET_BOARD_PLATFORM)" >> "$BOOTCTRL_DIR/Android.mk"
+          echo "LOCAL_MODULE_TAGS := optional" >> "$BOOTCTRL_DIR/Android.mk"
+          echo "LOCAL_SRC_FILES := boot_ctrl_stub.c" >> "$BOOTCTRL_DIR/Android.mk"
+          echo "LOCAL_C_INCLUDES += system/core/fs_mgr/include" >> "$BOOTCTRL_DIR/Android.mk"
+          echo "include \$(BUILD_STATIC_LIBRARY)" >> "$BOOTCTRL_DIR/Android.mk"
+          touch "$BOOTCTRL_DIR/boot_ctrl_stub.c"
+          echo "✓ bootctrl.$BOARD_PLATFORM"
+        fi
+        
+        # 2. libgptutils
+        GPTUTILS_DIR="${{ github.workspace }}/twrp/extras/gptutils"
+        mkdir -p "$GPTUTILS_DIR"
+        echo "LOCAL_PATH := \$(call my-dir)" > "$GPTUTILS_DIR/Android.mk"
+        echo "include \$(CLEAR_VARS)" >> "$GPTUTILS_DIR/Android.mk"
+        echo "LOCAL_MODULE := libgptutils" >> "$GPTUTILS_DIR/Android.mk"
+        echo "LOCAL_MODULE_TAGS := optional" >> "$GPTUTILS_DIR/Android.mk"
+        echo "LOCAL_SRC_FILES := gpt_stub.c" >> "$GPTUTILS_DIR/Android.mk"
+        echo "include \$(BUILD_STATIC_LIBRARY)" >> "$GPTUTILS_DIR/Android.mk"
+        touch "$GPTUTILS_DIR/gpt_stub.c"
+        echo "✓ libgptutils"
+        
+        # 3. libfec / libfec_rs (常见缺失)
+        FEC_DIR="${{ github.workspace }}/twrp/extras/fec"
+        mkdir -p "$FEC_DIR"
+        echo "LOCAL_PATH := \$(call my-dir)" > "$FEC_DIR/Android.mk"
+        echo "include \$(CLEAR_VARS)" >> "$FEC_DIR/Android.mk"
+        echo "LOCAL_MODULE := libfec" >> "$FEC_DIR/Android.mk"
+        echo "LOCAL_MODULE_TAGS := optional" >> "$FEC_DIR/Android.mk"
+        echo "LOCAL_SRC_FILES := fec_stub.c" >> "$FEC_DIR/Android.mk"
+        echo "include \$(BUILD_STATIC_LIBRARY)" >> "$FEC_DIR/Android.mk"
+        echo "" >> "$FEC_DIR/Android.mk"
+        echo "include \$(CLEAR_VARS)" >> "$FEC_DIR/Android.mk"
+        echo "LOCAL_MODULE := libfec_rs" >> "$FEC_DIR/Android.mk"
+        echo "LOCAL_MODULE_TAGS := optional" >> "$FEC_DIR/Android.mk"
+        echo "LOCAL_SRC_FILES := fec_rs_stub.c" >> "$FEC_DIR/Android.mk"
+        echo "include \$(BUILD_STATIC_LIBRARY)" >> "$FEC_DIR/Android.mk"
+        touch "$FEC_DIR/fec_stub.c"
+        touch "$FEC_DIR/fec_rs_stub.c"
+        echo "✓ libfec + libfec_rs"
+        
+        # 4. libsquashfs_utils
+        SQUASH_DIR="${{ github.workspace }}/twrp/extras/squashfs_utils"
+        mkdir -p "$SQUASH_DIR"
+        echo "LOCAL_PATH := \$(call my-dir)" > "$SQUASH_DIR/Android.mk"
+        echo "include \$(CLEAR_VARS)" >> "$SQUASH_DIR/Android.mk"
+        echo "LOCAL_MODULE := libsquashfs_utils" >> "$SQUASH_DIR/Android.mk"
+        echo "LOCAL_MODULE_TAGS := optional" >> "$SQUASH_DIR/Android.mk"
+        echo "LOCAL_SRC_FILES := squash_stub.c" >> "$SQUASH_DIR/Android.mk"
+        echo "include \$(BUILD_STATIC_LIBRARY)" >> "$SQUASH_DIR/Android.mk"
+        touch "$SQUASH_DIR/squash_stub.c"
+        echo "✓ libsquashfs_utils"
+        
+        echo "===== 依赖库创建完成 ====="
 
     - name: '编译 TWRP'
       shell: bash
