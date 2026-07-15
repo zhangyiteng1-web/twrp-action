@@ -3,9 +3,30 @@ name: Build TWRP Recovery
 on:
   workflow_dispatch:
     inputs:
+      device_tree_url:
+        description: '🌳 自定义设备树 GitHub 地址（提供则跳过 boot.img 自动生成）'
+        required: false
+        default: ''
+        type: string
+      device_tree_branch:
+        description: '🌿 设备树分支（留空使用默认）'
+        required: false
+        default: ''
+        type: string
       boot_img_url:
-        description: '📥 boot.img 直链下载地址（必填）'
-        required: true
+        description: '📥 boot.img 直链下载地址（使用自定义设备树时可留空）'
+        required: false
+        default: ''
+        type: string
+      manufacturer:
+        description: '🏭 设备厂商（自定义设备树时必填）'
+        required: false
+        default: ''
+        type: string
+      device_codename:
+        description: '📱 设备代号（自定义设备树时必填）'
+        required: false
+        default: ''
         type: string
       twrp_branch:
         description: '🔖 TWRP 版本分支'
@@ -26,16 +47,11 @@ on:
           - auto
           - recoveryimage
           - bootimage
-      manufacturer:
-        description: '🏭 设备厂商（留空自动检测）'
+      use_generic_bootctrl:
+        description: '🔧 启用通用 BootControl 修复（解决 HMI 链接错误）'
         required: false
-        default: ''
-        type: string
-      device_codename:
-        description: '📱 设备代号（留空自动检测）'
-        required: false
-        default: ''
-        type: string
+        default: false
+        type: boolean
       sync_jobs:
         description: '⚡ 源码同步线程数（留空自动检测 CPU 核心）'
         required: false
@@ -58,11 +74,21 @@ jobs:
       - name: 🚀 启动编译任务
         run: |
           echo "::group::📋 任务参数概览"
-          echo "📥 boot.img 地址: ${{ inputs.boot_img_url }}"
+          if [ -n "${{ inputs.device_tree_url }}" ]; then
+            echo "🌳 模式: 自定义设备树"
+            echo "🌳 设备树地址: ${{ inputs.device_tree_url }}"
+            echo "🌿 设备树分支: ${{ inputs.device_tree_branch || '默认' }}"
+            echo "🏭 设备厂商: ${{ inputs.manufacturer }}"
+            echo "📱 设备代号: ${{ inputs.device_codename }}"
+          else
+            echo "🤖 模式: boot.img 自动生成"
+            echo "📥 boot.img 地址: ${{ inputs.boot_img_url }}"
+            echo "🏭 设备厂商: ${{ inputs.manufacturer || '自动检测' }}"
+            echo "📱 设备代号: ${{ inputs.device_codename || '自动检测' }}"
+          fi
           echo "🔖 TWRP 版本: ${{ inputs.twrp_branch }}"
           echo "📦 输出类型: ${{ inputs.output_type }}"
-          echo "🏭 设备厂商: ${{ inputs.manufacturer || '自动检测' }}"
-          echo "📱 设备代号: ${{ inputs.device_codename || '自动检测' }}"
+          echo "🔧 通用BootCtrl: ${{ inputs.use_generic_bootctrl }}"
           echo "⚡ 同步线程: ${{ inputs.sync_jobs || '自动' }}"
           echo "🔨 编译线程: ${{ inputs.build_jobs || '自动' }}"
           echo "::endgroup::"
@@ -175,8 +201,9 @@ jobs:
           echo ""
           echo "✅ Repo 工具安装完成"
 
-      # ===== 第六阶段：安装 Twrpdtgen =====
+      # ===== 第六阶段：安装 Twrpdtgen（仅自动生成模式需要）=====
       - name: 🔧 安装 Twrpdtgen 设备树生成工具
+        if: inputs.device_tree_url == ''
         run: |
           echo "::group::⬆️ 升级 pip 到最新版"
           unset PIP_BREAK_SYSTEM_PACKAGES
@@ -193,8 +220,9 @@ jobs:
           echo ""
           echo "✅ Twrpdtgen 安装完成"
 
-      # ===== 第七阶段：下载 boot.img =====
+      # ===== 第七阶段：下载 boot.img（仅自动生成模式需要）=====
       - name: 📥 下载原厂 boot.img
+        if: inputs.device_tree_url == ''
         id: download_boot
         run: |
           echo "::group::🌐 正在下载 boot.img"
@@ -216,10 +244,13 @@ jobs:
         uses: ./
         with:
           boot-img-url: ${{ inputs.boot_img_url }}
+          device-tree-url: ${{ inputs.device_tree_url }}
+          device-tree-branch: ${{ inputs.device_tree_branch }}
           twrp-branch: ${{ inputs.twrp_branch }}
           output-type: ${{ inputs.output_type }}
           manufacturer: ${{ inputs.manufacturer }}
           device-codename: ${{ inputs.device_codename }}
+          use-generic-bootctrl: ${{ inputs.use_generic_bootctrl }}
           sync-jobs: ${{ inputs.sync_jobs }}
           build-jobs: ${{ inputs.build_jobs }}
 
