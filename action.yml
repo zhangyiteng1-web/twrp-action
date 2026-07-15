@@ -210,8 +210,10 @@ runs:
         # 修复常见编译问题
         BOARD_CONFIG="${{ github.workspace }}/twrp/device/$MANUFACTURER/$DEVICE/BoardConfig.mk"
         if [ -f "$BOARD_CONFIG" ]; then
-          # 禁用 AVB 避免分区大小报错
-          if ! grep -q "BOARD_AVB_ENABLE" "$BOARD_CONFIG"; then
+          # 禁用 AVB 避免分区大小报错（强制覆盖）
+          if grep -q "BOARD_AVB_ENABLE" "$BOARD_CONFIG"; then
+            sed -i 's/BOARD_AVB_ENABLE.*/BOARD_AVB_ENABLE := false/' "$BOARD_CONFIG"
+          else
             echo "BOARD_AVB_ENABLE := false" >> "$BOARD_CONFIG"
           fi
           # 修复 mkbootimg --dtb 参数兼容问题
