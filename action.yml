@@ -158,8 +158,11 @@ runs:
         if [ -f "$BOARD_CONFIG" ]; then
             # 删除所有AVB相关定义，规避分区大小校验报错
             sed -i '/BOARD_AVB_ENABLE/d' "$BOARD_CONFIG"
-            # 删除holi bootctrl配置，解决bootctrl.holi缺失ninja报错
+            # 删除holi bootctrl两行依赖定义
             sed -i '/TARGET_BOOTCTRL_VERSION/d' "$BOARD_CONFIG"
+            sed -i '/TARGET_BOOTCTRL_LIB/d' "$BOARD_CONFIG"
+            # 关闭update_engine_sideload编译，消除ninja缺失依赖
+            echo "TARGET_NO_UPDATE_ENGINE_SIDELOAD := true" >> "$BOARD_CONFIG"
             # 修正dtb参数
             if grep -q "\-\-dtb" "$BOARD_CONFIG"; then
                 sed -i 's/--dtb/--dt/g' "$BOARD_CONFIG"
